@@ -1,11 +1,18 @@
 body {
     background-color: black;
     color: white;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: "Ubuntu", monospace;
 }
 
 a {
     color: deepskyblue;
+    text-decoration: transparent;
+    -webkit-text-stroke: 0.5px #fff;
+}
+
+a:hover {
+    color: dodgerblue;   
+    -webkit-text-stroke: 0.5px dodgerblue;
 }
 
 .object {
