@@ -1,143 +1,74 @@
-//Start up the modules
-const express = require("express");
-const bodyParser = require("body-parser");
-const cookieParser = require("cookie-parser");
-const he = require("he");
+/* Built-in Modules */
+const { setTimeout: setTimeoutAsync } = require("timers/promises")
 const fs = require("fs");
 const crypto = require("crypto");
-const dockerode = require('dockerode');
+
+//Start up the modules
+const express = require("express");
+const he = require("he");
+const net = require("net");
+
+/* Express Middlewares */
+const cookieParser = require("cookie-parser");
+const cookie = require("cookie");
 const engine = require("jsembedtemplateengine");
-const docker = new dockerode();
+
+const docker = new (require('dockerode'))();
+
 const app = express();
 const http = require("http").Server(app);
-const net = require("net");
 const io = require("socket.io")(http, {
 	allowEIO3: true,
 	cookie: true
 });
 
-function setTimeoutAsync(ms) {
-	return new Promise(function (a) {
-		setTimeout(function () {
-			a(ms);
-		}, ms);
-	});
-}
-const cookie = require("cookie");
-const db = {
-	get: async function (item) {
-		return this.db[item];
-	},
-	set: async function (item, content) {
-		while (fs.existsSync(__dirname + "/db.lok")) {
-			await setTimeoutAsync(500);
-		}
-		fs.writeFileSync(__dirname + "/db.lok", "The database lock file!\r\nIf you got permanently locked:\r\nDelete this file.\r\nCause of lock: db.set");
-		fs.chmodSync(__dirname + "/db.lok", 448);
-		var db = JSON.parse(JSON.stringify(this.db));
-		db[item] = content;
-		this.db = db;
-		fs.rmSync(__dirname + "/db.lok", {
-			force: true
-		});
-	},
-	delete: async function (item) {
-		while (fs.existsSync(__dirname + "/db.lok")) {
-			await setTimeoutAsync(500);
-		}
-		fs.writeFileSync(__dirname + "/db.lok", "The database lock file!\r\nIf you got permanently locked:\r\nDelete this file.\r\nCause of lock: db.delete");
-		fs.chmodSync(__dirname + "/db.lok", 448);
-		var db = JSON.parse(JSON.stringify(this.db));
-		delete db[item];
-		this.db = db;
-		fs.rmSync(__dirname + "/db.lok", {
-			force: true
-		});
-	},
-	list: async function () {
-		return Object.keys(this.db)
-	},
-	db: null,
-	get db() {
-		return JSON.parse(require("fs").readFileSync(__dirname + "/db.json"));
-	},
-	set db(val) {
-		require("fs").writeFileSync(__dirname + "/db.json", JSON.stringify(val, null, "\t"));
+function symlinkJSEmbeds() {
+	const jsembeds = fs.readdirSync("./").filter(file => file.endsWith(".jsembeds"))
+
+	for (const jsembed of jsembeds) {
+		fs.unlinkSync(`./${jsembed}`)
+		fs.symlinkSync(`./${jsembed.replace(".jsembeds", ".html")}`, `./${jsembed}`)
 	}
-};
+}
+
+// symlinkJSEmbeds()
+
+const db = require("./db.js")
+
 const promisifyStream = stream => new Promise((resolve, reject) => {
 	let myData = Buffer.from("");
 	stream.on('data', data => myData = Buffer.concat([myData, data]))
 	stream.on('end', () => resolve(myData))
 	stream.on('error', reject)
 });
+
 let all_features = {};
+
 engine(app, {
 	embedOpen: "<nodejs-embed>",
 	embedClose: "</nodejs-embed>"
 });
+
 app.set('views', '.')
 app.set('view engine', 'jsembeds');
 
 //Assign some middleware
-app.use(bodyParser.urlencoded({
+
+//app.use(express.static("./public"))
+app.use(express.static("./public/styles"))
+
+app.use(express.urlencoded({
 	extended: true,
 	limit: "128mb"
 }));
-app.use(bodyParser.json({
+
+app.use(express.json({
 	limit: "128mb"
 }));
+
 app.use(cookieParser());
 
-emitter = {
-	workspaces: {},
-	createWorkspace: function (vm) {
-		return this.workspaces[vm] = {
-			emit: function (e, ...mit) {
-				if (e == "deletion") throw new Error("impossible");
-				if (!e) throw new Error("get me some events");
-				if (typeof e !== "string") throw new Error("omg this is really impossible to emit " + String(typeof e));
-				if (this.callbacks.hasOwnProperty(e)) {
-					for (let callback of this.callbacks[e]) {
-						callback(...mit)
-					}
-				}
-			},
-			on: function (e, mit) {
-				if (!e) throw new Error("get me some events");
-				if (typeof e !== "string") throw new Error("omg this is really impossible to emit " + String(typeof e));
-				if (typeof mit !== "function") throw new Error("omg this is really impossible to catch using " + String(typeof mit));
-				if (!this.callbacks.hasOwnProperty(e)) this.callbacks[e] = [];
-				this.callbacks[e].push(mit);
-			},
-			once: function (e, mit) {
-				if (!e) throw new Error("get me some events");
-				if (typeof e !== "string") throw new Error("omg this is really impossible to emit " + String(typeof e));
-				if (typeof mit !== "function") throw new Error("omg this is really impossible to catch using " + String(typeof mit));
-				if (!this.callbacks.hasOwnProperty(e)) this.callbacks[e] = [];
-				let regNum = this.callbacks[e].push(function (e, ...mit2) {
-					this.callbacks[e].splice(regNum, 1);
-					mit(e, ...mit2);
-				});
-			},
-			callbacks: {}
-		}
-	},
-	goToWorkspace: function (vm) {
-		return this.workspaces[vm] || this.createWorkspace(vm);
-	},
-	removeWorkspace: function (vm) {
-		if (!this.workspaces[vm]) this.workspaces[vm] = {
-			callbacks: {}
-		};
-		if (this.workspaces[vm].callbacks.hasOwnProperty("deletion")) {
-			for (let callback of this.workspaces[vm].callbacks["deletion"]) {
-				callback("");
-			}
-		}
-		delete this.workspaces[vm];
-	}
-}
+const emitter = require("./emitter.js")
 let ips = {};
 
 //SHA-256 generator
@@ -147,7 +78,7 @@ function SHA256(input) {
 
 //Token generator
 function genToken(long = 16) {
-	if (long % 2 != 0) throw new Error("invalid token length");
+	if (long % 2 != 0) throw new Error("Invalid token length");
 	let endToken = "";
 	while (endToken.length < long) {
 		endToken = endToken + crypto.randomBytes(1).toString("hex");
@@ -183,28 +114,7 @@ async function findUserByDuckCloudAssignedToken(token) {
 }
 
 //Automatic session extension and more
-app.use(function (req, res, next) {
-	if (req.cookies.token) {
-		res.cookie("token", req.cookies.token, {
-			maxAge: 30 * 24 * 60 * 60 * 1000
-		});
-	}
-	if (fs.existsSync(__dirname + "/duckcloud.blok") && req.originalUrl != "/regular.css") {
-		let read = fs.readFileSync(__dirname + "/duckcloud.blok").toString();
-		return res.status(503).render(__dirname + "/duckcloud_blocked.jsembeds", {
-			shutdown_info: (read ? ("<hr>There's some info that the administrator left:<br><pre>" + read + "</pre>") : "")
-		});
-	}
-	let ip = req.headers["cf-connecting-ip"] || req.headers["x-forwarded-for"] || req.ip || "0.0.0.0";
-	if (ips.hasOwnProperty(ip)) {
-		if (ips[ip].includes(new URL(req.headers.origin || "http://non-existing.domain.loc").host)) {
-			res.set("Access-Control-Allow-Origin", req.headers.origin || "*");
-			res.set("Access-Control-Allow-Credentials", "true");
-			res.set("Vary", "Origin");
-		}
-	}
-	next();
-});
+app.use((req, res, next) => require("./autosessionextension.js")(req, res, next, { ips }));
 
 //And... yep. goodluck! :)
 app.get('/', async (req, res) => {
@@ -212,10 +122,6 @@ app.get('/', async (req, res) => {
 		return res.redirect("/main");
 	}
 	res.render(__dirname + "/index.jsembeds");
-});
-
-app.get('/regular.css', async (req, res) => {
-	res.sendFile(__dirname + "/regular.css");
 });
 
 app.get("/register", async function (req, res) {
@@ -863,8 +769,9 @@ app.post("/newVM", async function (req, res) {
 		HostConfig: {
 			Memory: ((req.body.shouldUse512mbRAM || "off") == "on") ? 536870912 : 134217728,
 			MemorySwap: ((req.body.shouldUse512mbRAM || "off") == "on") ? 537919488 : 135266304
-		}
+		},
 	});
+
 	let red = await d.inspect();
 	user.object.virtuals[req.body.vm_name] = {
 		id: red.Id
